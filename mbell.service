@@ -1,0 +1,18 @@
+[Unit]
+Description=Mindfulness Bell Daemon
+Documentation=https://github.com/yourusername/mbell
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/mbell start
+ExecStop=%h/.cargo/bin/mbell stop
+Restart=on-failure
+RestartSec=5
+
+# Environment
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=default.target
