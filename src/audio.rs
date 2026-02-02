@@ -56,7 +56,7 @@ impl AudioPlayer {
 
     pub fn play_async(&self) {
         let volume = self.volume;
-        std::thread::spawn(move || {
+        tokio::task::spawn_blocking(move || {
             if let Err(e) = play_with_volume(volume) {
                 error!("Failed to play bell: {}", e);
             }

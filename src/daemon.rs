@@ -5,7 +5,7 @@ use crate::lock::{start_lock_monitor, LockEvent};
 use crate::stats::Stats;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
-use tokio::time::interval;
+use tokio::time::sleep;
 use tracing::{debug, info};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,19 +59,27 @@ impl Daemon {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<(Command, mpsc::Sender<Response>)>(32);
 
         // Start lock monitor
-        let mut lock_rx = start_lock_monitor();
+        let (mut lock_rx, lock_handle) = start_lock_monitor();
 
         // Set up signal handlers
         let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
 
-        // Timer for bell scheduling
+        // Bell interval duration
         let interval_duration = Duration::from_secs(self.config.interval * 60);
-        let mut timer = interval(Duration::from_secs(1)); // Check every second
 
         info!("Daemon running, first bell in {} minutes", self.config.interval);
 
         loop {
+            // Calculate time until next bell (only sleep when running)
+            let sleep_duration = if self.state == DaemonState::Running {
+                let elapsed = self.last_bell.elapsed();
+                interval_duration.saturating_sub(elapsed)
+            } else {
+                // When paused/locked, sleep for a long time; we'll be woken by other events
+                Duration::from_secs(3600)
+            };
+
             tokio::select! {
                 // Handle IPC connections
                 Ok(stream) = ipc_server.accept() => {
@@ -99,13 +107,10 @@ impl Daemon {
                     self.handle_lock_event(event);
                 }
 
-                // Timer tick
-                _ = timer.tick() => {
+                // Dynamic timer - wakes exactly when next bell is due
+                _ = sleep(sleep_duration) => {
                     if self.state == DaemonState::Running {
-                        let elapsed = self.last_bell.elapsed();
-                        if elapsed >= interval_duration {
-                            self.ring_bell();
-                        }
+                        self.ring_bell().await;
                     }
                 }
 
@@ -120,6 +125,9 @@ impl Daemon {
                 }
             }
         }
+
+        // Clean up the lock monitor task
+        lock_handle.abort();
 
         info!("Daemon stopped");
         Ok(())
@@ -166,7 +174,8 @@ impl Daemon {
                 })
             }
             Command::Ring => {
-                self.ring_bell();
+                // Manual ring - stats recorded asynchronously via spawn
+                self.ring_bell_sync();
                 Response::Ok
             }
             Command::Reload => {
@@ -207,11 +216,24 @@ impl Daemon {
         }
     }
 
-    fn ring_bell(&mut self) {
+    async fn ring_bell(&mut self) {
         debug!("Ringing bell");
         audio::ring_async(self.config.volume);
         self.bells_this_session += 1;
-        self.stats.record_bell();
+        self.stats.record_bell().await;
+        self.last_bell = Instant::now();
+        info!("Bell #{} this session", self.bells_this_session);
+    }
+
+    fn ring_bell_sync(&mut self) {
+        debug!("Ringing bell (sync)");
+        audio::ring_async(self.config.volume);
+        self.bells_this_session += 1;
+        // Spawn async stats recording to avoid blocking the command response
+        let mut stats = self.stats.clone();
+        tokio::spawn(async move {
+            stats.record_bell().await;
+        });
         self.last_bell = Instant::now();
         info!("Bell #{} this session", self.bells_this_session);
     }

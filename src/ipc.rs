@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
+
+static SOCKET_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Error, Debug)]
 pub enum IpcError {
@@ -45,14 +48,16 @@ pub struct StatusInfo {
     pub total_bells_session: u64,
 }
 
-pub fn socket_path() -> PathBuf {
-    let uid = std::env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let uid = unsafe { libc::getuid() };
-            PathBuf::from(format!("/run/user/{}", uid))
-        });
-    uid.join("mbell.sock")
+pub fn socket_path() -> &'static PathBuf {
+    SOCKET_PATH.get_or_init(|| {
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let uid = unsafe { libc::getuid() };
+                PathBuf::from(format!("/run/user/{}", uid))
+            });
+        runtime_dir.join("mbell.sock")
+    })
 }
 
 /// Server side - runs in the daemon
@@ -64,12 +69,14 @@ impl IpcServer {
     pub async fn new() -> Result<Self, IpcError> {
         let path = socket_path();
 
-        // Remove existing socket if it exists
-        if path.exists() {
-            std::fs::remove_file(&path)?;
+        // Remove existing socket, ignoring NotFound error (avoids TOCTOU race)
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
 
-        let listener = UnixListener::bind(&path)?;
+        let listener = UnixListener::bind(path)?;
         info!("IPC server listening on {:?}", path);
 
         Ok(Self { listener })
@@ -102,9 +109,9 @@ impl IpcServer {
             Err(e) => {
                 error!("Failed to parse command: {}", e);
                 let response = Response::Error(format!("Invalid command: {}", e));
-                let _ = writer
-                    .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
-                    .await;
+                if let Err(e) = write_json_response(&mut writer, &response).await {
+                    error!("Failed to send error response: {}", e);
+                }
                 return;
             }
         };
@@ -117,26 +124,35 @@ impl IpcServer {
         // Send command to daemon
         if cmd_tx.send((command, resp_tx)).await.is_err() {
             let response = Response::Error("Daemon not responding".to_string());
-            let _ = writer
-                .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
-                .await;
+            if let Err(e) = write_json_response(&mut writer, &response).await {
+                error!("Failed to send error response: {}", e);
+            }
             return;
         }
 
         // Wait for response
         if let Some(response) = resp_rx.recv().await {
-            let json = serde_json::to_string(&response).unwrap();
-            let _ = writer.write_all(format!("{}\n", json).as_bytes()).await;
+            if let Err(e) = write_json_response(&mut writer, &response).await {
+                error!("Failed to send response: {}", e);
+            }
         }
     }
 }
 
+async fn write_json_response<W: tokio::io::AsyncWriteExt + Unpin>(
+    writer: &mut W,
+    response: &Response,
+) -> Result<(), IpcError> {
+    let json = serde_json::to_string(response)?;
+    writer.write_all(json.as_bytes()).await?;
+    writer.write_all(b"\n").await?;
+    Ok(())
+}
+
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        let path = socket_path();
-        if path.exists() {
-            let _ = std::fs::remove_file(&path);
-        }
+        // Remove socket, ignoring errors (avoids TOCTOU race)
+        let _ = std::fs::remove_file(socket_path());
     }
 }
 

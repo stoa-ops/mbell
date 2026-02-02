@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 use zbus::{proxy, Connection};
 
@@ -118,16 +119,28 @@ async fn get_session_path(connection: &Connection) -> Result<String, Box<dyn std
     Ok(session_path.to_string())
 }
 
+/// Handle for the lock monitor that can be used to abort its tasks on shutdown
+pub struct LockMonitorHandle {
+    _task: JoinHandle<()>,
+}
+
+impl LockMonitorHandle {
+    /// Abort the lock monitor tasks
+    pub fn abort(&self) {
+        self._task.abort();
+    }
+}
+
 /// Start the lock monitor in a background task
-pub fn start_lock_monitor() -> mpsc::Receiver<LockEvent> {
+pub fn start_lock_monitor() -> (mpsc::Receiver<LockEvent>, LockMonitorHandle) {
     let (tx, rx) = mpsc::channel(10);
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let monitor = LockMonitor::new(tx);
         if let Err(e) = monitor.run().await {
             error!("Lock monitor error: {}", e);
         }
     });
 
-    rx
+    (rx, LockMonitorHandle { _task: task })
 }

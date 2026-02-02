@@ -1,10 +1,19 @@
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use thiserror::Error;
+use tokio::fs;
 use tracing::{debug, warn};
+
+static PROJECT_DIRS: OnceLock<Option<ProjectDirs>> = OnceLock::new();
+
+fn get_project_dirs() -> Option<&'static ProjectDirs> {
+    PROJECT_DIRS
+        .get_or_init(|| ProjectDirs::from("", "", "mbell"))
+        .as_ref()
+}
 
 #[derive(Error, Debug)]
 pub enum StatsError {
@@ -36,41 +45,58 @@ pub struct Stats {
 impl Stats {
     pub fn load() -> Result<Self, StatsError> {
         let path = Self::stats_path()?;
+        let temp_path = path.with_extension("json.tmp");
+
+        // Check for stale temp file from interrupted save and recover if possible
+        if temp_path.exists() && !path.exists() {
+            debug!("Found stale temp file, attempting recovery");
+            if let Err(e) = std::fs::rename(&temp_path, &path) {
+                warn!("Failed to recover from temp file: {}", e);
+                // Clean up the temp file
+                let _ = std::fs::remove_file(&temp_path);
+            } else {
+                debug!("Successfully recovered stats from temp file");
+            }
+        } else if temp_path.exists() {
+            // Both exist, main file takes precedence - clean up stale temp
+            debug!("Cleaning up stale temp file");
+            let _ = std::fs::remove_file(&temp_path);
+        }
 
         if !path.exists() {
             debug!("Stats file does not exist, creating default");
             return Ok(Stats::default());
         }
 
-        let contents = fs::read_to_string(&path)?;
+        let contents = std::fs::read_to_string(&path)?;
         let stats: Stats = serde_json::from_str(&contents)?;
         Ok(stats)
     }
 
-    pub fn save(&self) -> Result<(), StatsError> {
+    pub async fn save(&self) -> Result<(), StatsError> {
         let path = Self::stats_path()?;
 
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).await?;
         }
 
         // Write atomically by writing to temp file first
         let temp_path = path.with_extension("json.tmp");
         let contents = serde_json::to_string_pretty(self)?;
-        fs::write(&temp_path, &contents)?;
-        fs::rename(&temp_path, &path)?;
+        fs::write(&temp_path, &contents).await?;
+        fs::rename(&temp_path, &path).await?;
 
         debug!("Stats saved successfully");
         Ok(())
     }
 
     pub fn stats_path() -> Result<PathBuf, StatsError> {
-        ProjectDirs::from("", "", "mbell")
+        get_project_dirs()
             .map(|dirs| dirs.data_dir().join("stats.json"))
             .ok_or(StatsError::NoDataDir)
     }
 
-    pub fn record_bell(&mut self) {
+    pub async fn record_bell(&mut self) {
         let now = Utc::now();
         let today = Local::now().date_naive();
 
@@ -105,14 +131,14 @@ impl Stats {
             self.longest_streak = self.current_streak;
         }
 
-        if let Err(e) = self.save() {
+        if let Err(e) = self.save().await {
             warn!("Failed to save stats: {}", e);
         }
     }
 
-    pub fn reset(&mut self) -> Result<(), StatsError> {
+    pub async fn reset(&mut self) -> Result<(), StatsError> {
         *self = Stats::default();
-        self.save()
+        self.save().await
     }
 
     pub fn display(&self) -> String {

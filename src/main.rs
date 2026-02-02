@@ -58,7 +58,7 @@ async fn main() {
         Commands::Pause => cmd_pause().await,
         Commands::Resume => cmd_resume().await,
         Commands::Status => cmd_status().await,
-        Commands::Stats { reset } => cmd_stats(reset),
+        Commands::Stats { reset } => cmd_stats(reset).await,
         Commands::Ring => cmd_ring().await,
         Commands::Config { edit, path } => cmd_config(edit, path),
     }
@@ -180,10 +180,10 @@ async fn cmd_status() {
     }
 }
 
-fn cmd_stats(reset: bool) {
+async fn cmd_stats(reset: bool) {
     if reset {
         let mut stats = Stats::load().unwrap_or_default();
-        if let Err(e) = stats.reset() {
+        if let Err(e) = stats.reset().await {
             eprintln!("Failed to reset stats: {}", e);
             std::process::exit(1);
         }

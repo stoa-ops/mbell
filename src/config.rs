@@ -2,7 +2,16 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use thiserror::Error;
+
+static PROJECT_DIRS: OnceLock<Option<ProjectDirs>> = OnceLock::new();
+
+fn get_project_dirs() -> Option<&'static ProjectDirs> {
+    PROJECT_DIRS
+        .get_or_init(|| ProjectDirs::from("", "", "mbell"))
+        .as_ref()
+}
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -67,13 +76,13 @@ impl Config {
     }
 
     pub fn config_path() -> Result<PathBuf, ConfigError> {
-        ProjectDirs::from("", "", "mbell")
+        get_project_dirs()
             .map(|dirs| dirs.config_dir().join("config.toml"))
             .ok_or(ConfigError::NoConfigDir)
     }
 
     pub fn config_dir() -> Result<PathBuf, ConfigError> {
-        ProjectDirs::from("", "", "mbell")
+        get_project_dirs()
             .map(|dirs| dirs.config_dir().to_path_buf())
             .ok_or(ConfigError::NoConfigDir)
     }
