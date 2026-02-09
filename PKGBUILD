@@ -1,10 +1,10 @@
-# Maintainer: Your Name <your.email@example.com>
+# Maintainer: Stoa Ops <stoa-ops@github.com>
 pkgname=mbell
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="A mindfulness bell daemon for Linux"
 arch=('x86_64')
-url="https://github.com/yourusername/mbell"
+url="https://github.com/stoa-ops/mbell"
 license=('MIT')
 depends=('alsa-lib')
 makedepends=('rust' 'cargo')
@@ -12,16 +12,14 @@ optdepends=(
     'pipewire-pulse: PipeWire audio support'
     'pulseaudio: PulseAudio audio support'
 )
-source=("$pkgname-$pkgver.tar.gz")
-sha256sums=('SKIP')
 
 build() {
-    cd "$pkgname-$pkgver"
+    cd "$startdir"
     cargo build --release --locked
 }
 
 package() {
-    cd "$pkgname-$pkgver"
+    cd "$startdir"
 
     # Install binary
     install -Dm755 "target/release/mbell" "$pkgdir/usr/bin/mbell"

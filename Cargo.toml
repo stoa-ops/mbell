@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["mbell contributors"]
 description = "A mindfulness bell daemon for Linux"
 license = "MIT"
-repository = "https://github.com/yourusername/mbell"
+repository = "https://github.com/stoa-ops/mbell"
 keywords = ["mindfulness", "bell", "daemon", "notification"]
 categories = ["command-line-utilities"]
 
