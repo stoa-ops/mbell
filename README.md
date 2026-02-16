@@ -17,10 +17,45 @@ A lightweight Rust daemon that rings a gentle Tibetan singing bowl at configurab
 ### From source
 
 ```bash
-git clone https://github.com/yourusername/mbell
+git clone https://github.com/stoa-ops/mbell
 cd mbell
 cargo build --release
 cp target/release/mbell ~/.cargo/bin/
+```
+
+### Ubuntu / Debian
+
+Install build dependencies:
+
+```bash
+sudo apt install build-essential pkg-config libasound2-dev
+```
+
+Install Rust if you don't have it:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+Build and install:
+
+```bash
+make
+sudo make install
+```
+
+Enable the systemd user service:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now mbell
+```
+
+To uninstall:
+
+```bash
+sudo make uninstall
 ```
 
 ### Arch Linux (AUR)
